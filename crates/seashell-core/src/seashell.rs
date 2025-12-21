@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -10,6 +11,7 @@ use solana_instruction::error::InstructionError;
 use solana_instruction::Instruction;
 use solana_precompile_error::PrecompileError;
 use solana_program_runtime::invoke_context::{EnvironmentConfig, InvokeContext};
+use solana_program_runtime::loaded_programs::ProgramRuntimeEnvironments;
 use solana_pubkey::Pubkey;
 use solana_svm_callback::InvokeContextCallback;
 use solana_svm_log_collector::LogCollector;
@@ -55,7 +57,7 @@ impl Default for Seashell {
         Seashell {
             config: Config::default(),
             accounts_db: AccountsDb::default(),
-            compute_budget: ComputeBudget::new_with_defaults(false),
+            compute_budget: ComputeBudget::new_with_defaults(false, false),
             feature_set: FeatureSet::all_enabled(),
             log_collector: None,
         }
@@ -232,28 +234,31 @@ impl Seashell {
 
         let instruction_accounts = compile_accounts_for_instruction(&ixn);
 
-        let mut dedup_map = vec![u8::MAX; solana_transaction_context::MAX_ACCOUNTS_PER_TRANSACTION];
+        let mut dedup_map = vec![u16::MAX; solana_transaction_context::MAX_ACCOUNTS_PER_TRANSACTION];
         for (idx, account) in instruction_accounts.iter().enumerate() {
             let index_in_instruction = dedup_map
                 .get_mut(account.index_in_transaction as usize)
                 .unwrap();
-            if *index_in_instruction == u8::MAX {
-                *index_in_instruction = idx as u8;
+            if *index_in_instruction == u16::MAX {
+                *index_in_instruction = idx as u16;
             }
         }
+
+        let data = Cow::Borrowed(&ixn.data[..]);
 
         transaction_context
             .configure_next_instruction(
                 INSTRUCTION_PROGRAM_ID_INDEX as IndexOfAccount,
                 instruction_accounts,
                 dedup_map,
-                &ixn.data,
+                data,
             )
             .expect("Failed to configure instruction");
 
         let epoch_stake_callback = SeashellInvokeContextCallback { feature_set: &self.feature_set };
         let runtime_features = self.feature_set.runtime_features();
         let mut programs = self.accounts_db.programs.clone();
+        let program_runtime_environments = ProgramRuntimeEnvironments::default();
         let mut invoke_context = InvokeContext::new(
             &mut transaction_context,
             &mut programs,
@@ -262,6 +267,8 @@ impl Seashell {
                 /* blockhash_lamports_per_signature */ 5000, // The default value
                 &epoch_stake_callback,
                 &runtime_features,
+                &program_runtime_environments,
+                &program_runtime_environments,
                 &sysvar_cache,
             ),
             self.log_collector.clone(),
@@ -288,24 +295,7 @@ impl Seashell {
                 let post_execution_accounts: Vec<(Pubkey, Account)> = transaction_accounts
                     .iter()
                     .map(|(pubkey, account_shared_data)| {
-                        transaction_context
-                            .find_index_of_account(pubkey)
-                            .map(|idx| {
-                                let accounts = transaction_context.accounts();
-                                let account = accounts
-                                    .try_borrow(idx)
-                                    .expect("Failed to borrow TransactionAccounts")
-                                    .clone();
-                                if self.config.memoize {
-                                    self.set_account_from_account_shared_data(
-                                        *pubkey,
-                                        account.clone(),
-                                    );
-                                }
-
-                                (*pubkey, account.into())
-                            })
-                            .unwrap_or((*pubkey, account_shared_data.to_owned().into()))
+                        (*pubkey, account_shared_data.to_owned().into())
                     })
                     .collect();
 

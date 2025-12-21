@@ -12,7 +12,6 @@ use solana_program_runtime::loaded_programs::{
 };
 use solana_program_runtime::sysvar_cache::SysvarCache;
 use solana_pubkey::Pubkey;
-use solana_transaction_context::TransactionAccount;
 
 use crate::scenario::Scenario;
 use crate::sysvar::{SysvarInstructions, Sysvars};
@@ -69,7 +68,7 @@ impl AccountsDb {
         &self,
         allow_uninitialized_accounts: bool,
         instruction: &Instruction,
-    ) -> Vec<TransactionAccount> {
+    ) -> Vec<(Pubkey, AccountSharedData)> {
         // always insert the program_id of the instruction as the first account.
         let mut accounts =
             vec![(instruction.program_id, self.account_must(&instruction.program_id))];
@@ -108,7 +107,7 @@ impl AccountsDb {
         accounts
     }
 
-    pub fn sysvars_for_instruction(&self, accounts: &[TransactionAccount]) -> SysvarCache {
+    pub fn sysvars_for_instruction(&self, accounts: &[(Pubkey, AccountSharedData)]) -> SysvarCache {
         let mut sysvar_cache = SysvarCache::default();
 
         sysvar_cache.fill_missing_entries(|sysvar, set_sysvar| {
