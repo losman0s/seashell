@@ -1,7 +1,7 @@
-use std::cell::Cell;
 use std::collections::HashMap;
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use flate2::read::GzDecoder;
@@ -17,14 +17,41 @@ use solana_rpc_client::rpc_client::RpcClient;
 /// Scenario manages account overrides with automatic persistence.
 /// It stores accounts as AccountSharedData internally but serializes as Account.
 /// When an RPC client is provided, missing accounts are fetched and persisted.
-#[derive(Default)]
 pub struct Scenario {
-    should_persist: Cell<bool>,
+    should_persist: AtomicBool,
     pub(crate) allow_uninitialized_accounts: bool,
-    dirty: Cell<bool>,
+    dirty: AtomicBool,
     data: Arc<RwLock<HashMap<Pubkey, AccountSharedData>>>,
     path: Option<PathBuf>,
-    rpc_client: Option<RpcClient>,
+    rpc_client: Option<Arc<RpcClient>>,
+}
+
+impl Default for Scenario {
+    fn default() -> Self {
+        Self {
+            should_persist: AtomicBool::new(false),
+            allow_uninitialized_accounts: false,
+            dirty: AtomicBool::new(false),
+            data: Arc::new(RwLock::new(HashMap::new())),
+            path: None,
+            rpc_client: None,
+        }
+    }
+}
+
+impl Clone for Scenario {
+    fn clone(&self) -> Self {
+        Self {
+            should_persist: AtomicBool::new(self.should_persist.load(Ordering::Relaxed)),
+            allow_uninitialized_accounts: self.allow_uninitialized_accounts,
+            dirty: AtomicBool::new(self.dirty.load(Ordering::Relaxed)),
+            // Deep copy data - each clone gets its own isolated copy
+            // This is necessary for parallel execution where workers may write different overrides
+            data: Arc::new(RwLock::new(self.data.read().clone())),
+            path: self.path.clone(),
+            rpc_client: self.rpc_client.clone(),
+        }
+    }
 }
 
 #[serde_as]
@@ -95,9 +122,9 @@ impl Scenario {
         };
 
         Scenario {
-            should_persist: Cell::new(true),
+            should_persist: AtomicBool::new(true),
             allow_uninitialized_accounts,
-            dirty: Cell::new(false),
+            dirty: AtomicBool::new(false),
             data: Arc::new(RwLock::new(data)),
             path: Some(path),
             rpc_client: None,
@@ -111,18 +138,18 @@ impl Scenario {
         allow_uninitialized_accounts: bool,
     ) -> Self {
         let mut scenario = Self::from_file(path, allow_uninitialized_accounts);
-        scenario.rpc_client = Some(RpcClient::new(rpc_url));
+        scenario.rpc_client = Some(Arc::new(RpcClient::new(rpc_url)));
         scenario
     }
 
     pub fn rpc_only(rpc_url: String, allow_uninitialized_accounts: bool) -> Self {
         Scenario {
-            should_persist: Cell::new(false),
+            should_persist: AtomicBool::new(false),
             allow_uninitialized_accounts,
-            dirty: Cell::new(false),
+            dirty: AtomicBool::new(false),
             data: Arc::new(RwLock::new(HashMap::new())),
             path: None,
-            rpc_client: Some(RpcClient::new(rpc_url)),
+            rpc_client: Some(Arc::new(RpcClient::new(rpc_url))),
         }
     }
 
@@ -135,14 +162,14 @@ impl Scenario {
     pub fn try_fetch_from_rpc(&self, pubkey: &Pubkey) -> Option<AccountSharedData> {
         log::debug!("Attempting to fetch account: {pubkey}");
         let rpc_client = self.rpc_client.as_ref().expect(
-            "Account not found in scenario or accounts. RPC URL must be configured to fetch \
-             missing accounts.",
+            format!("Account {pubkey} not found in scenario or accounts. RPC URL must be configured to fetch \
+             missing accounts.").as_str(),
         );
 
         match rpc_client.get_account(pubkey) {
             Ok(account) => {
                 let account_shared: AccountSharedData = account.into();
-                self.dirty.set(true);
+                self.dirty.store(true, Ordering::Relaxed);
                 self.data.write().insert(*pubkey, account_shared.clone());
                 Some(account_shared)
             }
@@ -165,7 +192,7 @@ impl Scenario {
     }
 
     pub fn insert(&mut self, pubkey: Pubkey, account: AccountSharedData) {
-        self.dirty.set(true);
+        self.dirty.store(true, Ordering::Relaxed);
         self.data.write().insert(pubkey, account);
     }
 
@@ -176,7 +203,7 @@ impl Scenario {
 
 impl Drop for Scenario {
     fn drop(&mut self) {
-        if self.dirty.get() && self.should_persist.get() {
+        if self.dirty.load(Ordering::Relaxed) && self.should_persist.load(Ordering::Relaxed) {
             if let Some(path) = &self.path {
                 // Convert AccountSharedData back to Account for serialization
                 let accounts: HashMap<Pubkey, Account> = self

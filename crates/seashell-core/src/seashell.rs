@@ -23,6 +23,7 @@ use crate::compile::{compile_accounts_for_instruction, INSTRUCTION_PROGRAM_ID_IN
 use crate::error::SeashellError;
 use crate::scenario::Scenario;
 
+#[derive(Clone)]
 pub struct Config {
     pub memoize: bool,
     pub allow_uninitialized_accounts_local: bool,
@@ -63,6 +64,26 @@ impl Default for Seashell {
         }
     }
 }
+
+impl Clone for Seashell {
+    fn clone(&self) -> Self {
+        // Each clone gets its own isolated accounts (deep copy via AccountsDb::clone)
+        // and its own log_collector to avoid thread-safety issues with Rc<RefCell>
+        Seashell {
+            config: self.config.clone(),
+            accounts_db: self.accounts_db.clone(),
+            compute_budget: self.compute_budget.clone(),
+            feature_set: self.feature_set.clone(),
+            // Create a new log_collector if the original has one, don't share Rc
+            log_collector: if self.log_collector.is_some() {
+                Some(Rc::new(RefCell::new(LogCollector::default())))
+            } else {
+                None
+            },
+        }
+    }
+}
+
 struct SeashellInvokeContextCallback<'a> {
     feature_set: &'a FeatureSet,
 }

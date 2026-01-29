@@ -23,9 +23,24 @@ pub fn mock_account_shared_data(pubkey: Pubkey) -> AccountSharedData {
 #[derive(Default)]
 pub struct AccountsDb {
     pub scenario: Scenario,
-    pub accounts: RwLock<HashMap<Pubkey, AccountSharedData>>,
+    pub accounts: Arc<RwLock<HashMap<Pubkey, AccountSharedData>>>,
     pub programs: ProgramCacheForTxBatch,
     pub sysvars: Sysvars,
+}
+
+impl Clone for AccountsDb {
+    fn clone(&self) -> Self {
+        Self {
+            // Clone scenario data
+            scenario: self.scenario.clone(),
+            // Deep copy accounts - each clone gets its own isolated copy
+            // This is necessary for parallel execution where workers write
+            // their own signer/token accounts via set_overrides
+            accounts: Arc::new(RwLock::new(self.accounts.read().clone())), // this is dumb, nvm
+            programs: self.programs.clone(),
+            sysvars: self.sysvars.clone(),
+        }
+    }
 }
 
 impl AccountsDb {

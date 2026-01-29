@@ -22,6 +22,21 @@ pub struct Sysvars {
     last_restart_slot: RwLock<LastRestartSlot>,
 }
 
+impl Clone for Sysvars {
+    fn clone(&self) -> Self {
+        Self {
+            clock: RwLock::new(self.clock.read().clone()),
+            epoch_schedule: RwLock::new(self.epoch_schedule.read().clone()),
+            epoch_rewards: RwLock::new(self.epoch_rewards.read().clone()),
+            rent: RwLock::new(self.rent.read().clone()),
+            // SlotHashes derefs to Vec, so we need to construct a new SlotHashes
+            slot_hashes: RwLock::new(SlotHashes::new(&self.slot_hashes.read())),
+            stake_history: RwLock::new(self.stake_history.read().clone()),
+            last_restart_slot: RwLock::new(self.last_restart_slot.read().clone()),
+        }
+    }
+}
+
 impl Default for Sysvars {
     fn default() -> Self {
         let clock = Clock::default();
