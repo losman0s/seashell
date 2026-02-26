@@ -313,11 +313,21 @@ impl Seashell {
         let return_data = transaction_context.get_return_data().1.to_owned();
         match result {
             Ok(_) => {
-                let post_execution_accounts: Vec<(Pubkey, Account)> = transaction_accounts
-                    .iter()
-                    .map(|(pubkey, account_shared_data)| {
-                        (*pubkey, account_shared_data.to_owned().into())
+                let n = transaction_context.get_number_of_accounts();
+                let keys: Vec<Pubkey> = (0..n)
+                    .map(|i| {
+                        *transaction_context
+                            .get_key_of_account_at_index(i)
+                            .unwrap()
                     })
+                    .collect();
+                let accounts = transaction_context
+                    .deconstruct_without_keys()
+                    .expect("deconstruct_without_keys after successful execution");
+                let post_execution_accounts: Vec<(Pubkey, Account)> = keys
+                    .into_iter()
+                    .zip(accounts)
+                    .map(|(pubkey, asd)| (pubkey, asd.into()))
                     .collect();
 
                 InstructionProcessingResult {
